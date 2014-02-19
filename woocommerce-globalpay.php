@@ -169,12 +169,7 @@ function woocommerce_globalpay_init() {
       $txn_ref = get_current_user_id() . '-' . $order->id . '-' . time();
       update_post_meta($order->id, 'merch_txnref', $txn_ref);
 
-      $order_total = round(
-        number_format(
-          $order->get_order_total() + $order->get_order_discount(), 2, '.', ''
-        ),
-        0
-      );
+      $order_total = $order->get_order_total();
 
       if ($this->debug=='yes') {
         $this->log->add( 'globalpay', 'Generating payment form for order #' . $order->id . '.');
@@ -215,7 +210,7 @@ function woocommerce_globalpay_init() {
       
       $woocommerce->add_inline_js('
         jQuery("body").block({
-          message: "<img src=\"'.esc_url( $woocommerce->plugin_url() ).'/assets/images/ajax-loader.gif\" alt=\"Redirecting...\" style=\"float:left; margin-right: 10px;\" />'.__('Thank you for your order. We are now redirecting you to GlobalPay to make payment.', 'woocommerce').'",
+          message: "' . __('Thank you for your order. We are now redirecting you to GlobalPay to make payment.', 'woocommerce') .'",
           overlayCSS: {
             background: "#fff",
             opacity: 0.6
@@ -281,6 +276,11 @@ function woocommerce_globalpay_init() {
       $_GET['order'] = $order->id;
 
       $this->get_transaction_status($merch_txnref, $order->get_order_total());
+      foreach ($this->payment_info as $k => $v) {
+        if ('status' != $k){
+          update_post_meta((int)$order_id, $k, $v);
+        }
+      }
 
       if ('completed' == $this->payment_info['status']) {
         // Payment completed
@@ -289,78 +289,32 @@ function woocommerce_globalpay_init() {
         $woocommerce->cart->empty_cart();
         
         if ($this->debug=='yes') $this->log->add('globalpay', 'Payment complete.' );
-        
-        foreach ($this->payment_info as $k => $v) {
-          if ('status' != $k){
-            update_post_meta((int)$order_id, $k, $v);
-          }
-        }
-        
-        update_post_meta( (int) $order_id, 'Payment Method', 'GlobalPay');
-        
-        $this->feedback_message = $this->thanks_message
-          . '<br/>Below are the details of your payment transaction:'
-          . '<br/><strong>Transaction reference:</strong> '
-            . "{$this->payment_info['merch_txnref']}"
-          . "<br/><strong>Customer name:</strong> {$this->payment_info['names']}"
-          . '<br/><strong>Amount paid:</strong> '
-            . number_format($this->payment_info['amount'], 2)
-          . '<br/><strong>GlobalPay reference:</strong> '
-            . "{$this->payment_info['txnref']}"
-          . '<br/><strong>Transaction status description:</strong> '
-            . "{$this->payment_info['payment_status_description']}";
-        
+
+        update_post_meta((int) $order_id, 'Payment Method', $this->method_title);
+
         $this->send_mail_successful_payment(
           $order->id,
           $order->get_order_total(),
           $this->payment_info['txnref'],
           $order->user_id
         );
-      } else if ('on-hold' == $this->payment_info['status']) {
-        $order->update_status(
-          'on-hold',
-          sprintf (
-            __( 'Payment pending: %s', 'woocommerce' ),
-            $this->payment_info['payment_status_description']
-          )
-        );
-        
-        // Notify admin of discrepancy in amount
-        $this->send_mail_discrepancy_in_payment($order->id, $order->user_id,
-          $order->get_order_total(), $this->payment_info['amount']);
-
-        $this->feedback_message = 'There was a discrepancy between the amount paid and the order amount. A sales person has been notified'
-          . '<br/>Below are the details of your payment transaction:'
-          . '<br/><strong>Transaction reference:</strong> '
-            . "{$this->payment_info['merch_txnref']}"
-          . "<br/><strong>Customer name:</strong> {$this->payment_info['names']}"
-          . '<br/><strong>Amount:</strong> '
-            . number_format($this->payment_info['amount'], 2)
-          . '<br/><strong>GlobalPay reference:</strong> '
-            . "{$this->payment_info['txnref']}"
-          . '<br/><strong>Transaction status description:</strong> '
-            . "{$this->payment_info['payment_status_description']}";
       } else if ('failed' == $this->payment_info['status']) {
         $error_code = $this->payment_info['payment_status_description'];
-        
         $order->add_order_note(__('Payment Failed - ' . $error_code, 'woocommerce'));
         $order->update_status('failed');
 
         $woocommerce->add_error('Transaction Failed: ' . $error_code);
-        
-        $this->feedback_message = $this->failed_message
-          . '<br/>Below are the details of your payment transaction:'
-          . '<br/><strong>Transaction reference:</strong> '
-            . "{$this->payment_info['merch_txnref']}"
-          . "<br/><strong>Customer name:</strong> {$this->payment_info['names']}"
-          . '<br/><strong>Amount:</strong> '
-            . number_format($this->payment_info['amount'], 2)
-          . '<br/><strong>GlobalPay reference:</strong> '
-            . "{$this->payment_info['txnref']}"
-          . '<br/><strong>Transaction status description:</strong> '
-              . "{$this->payment_info['payment_status_description']}";
+      } else if ('on-hold' == $this->payment_info['status']) {
+        $order->update_status('on-hold', sprintf(
+            __( 'Payment pending: %s', 'woocommerce' ),
+            'Amount discrepancy'
+        ));
+        $error_code = 'Amount discrepancy';
+        // Notify admin of discrepancy in amount
+        $this->send_mail_discrepancy_in_payment($order->id, $order->user_id,
+            $order->get_order_total(), $this->payment_info['amount']);
+        $woocommerce->add_error('Order on hold: ' . $error_code);
       } else if (FALSE == $this->payment_info['status']) {
-        $error = 'Error looking up payment information';
         $order->update_status(
           'on-hold',
           sprintf (
@@ -374,17 +328,59 @@ function woocommerce_globalpay_init() {
         $this->send_mail_payment_info_pending($order->id,
           $order->billing_first_name . ' ' . $order->billing_last_name);
         $woocommerce->add_error('There was an error while looking up the details of your payment information. A sales person has been notified');
-        
-        $this->feedback_message = $this->failed_message . $error;
       }
     }
-    
-    function thankyou_page() {
+
+    function thankyou_page($order_id) {
+      $order = new WC_Order($order_id);
+      // All elements of $order_payment_info are arrays. So when getting the
+      // value get the value at the end of the array which should represent
+      // the most current value
+      $order_payment_info = get_post_meta($order_id);
+      if ('completed' == $order->status || 'processing' == $order->status) {
+        $this->feedback_message = $this->thanks_message
+          . '<br/>Below are the details of your payment transaction:'
+          . '<br/><strong>Transaction reference:</strong> ' . end($order_payment_info['merch_txnref'])
+          . '<br/><strong>Customer name:</strong> ' . end($order_payment_info['names'])
+          . '<br/><strong>Amount paid:</strong> '
+            . number_format(end($order_payment_info['amount']), 2)
+          . '<br/><strong>Currency:</strong> ' . end($order_payment_info['currency'])
+          . '<br/><strong>Payment Channel:</strong> ' . end($order_payment_info['channel'])
+          . '<br/><strong>GlobalPay reference:</strong> ' . end($order_payment_info['txnref'])
+          . '<br/><strong>Transaction status description:</strong> ' . end($order_payment_info['payment_status_description']);
+      } else if ('failed' == $order->status) {
+        $this->feedback_message = $this->error_message
+          . '<br/>Below are the details of your payment transaction:'
+          . '<br/><strong>Transaction reference:</strong> ' . end($order_payment_info['merch_txnref'])
+          . '<br/><strong>Customer name:</strong> ' . end($order_payment_info['names'])
+          . '<br/><strong>Amount paid:</strong> '
+            . number_format(end($order_payment_info['amount']), 2)
+          . '<br/><strong>Currency:</strong> ' . end($order_payment_info['currency'])
+          . '<br/><strong>Payment Channel:</strong> ' . end($order_payment_info['channel'])
+          . '<br/><strong>GlobalPay reference:</strong> ' . end($order_payment_info['txnref'])
+          . '<br/><strong>Transaction status description:</strong> ' . end($order_payment_info['payment_status_description']);
+      } else if ('on-hold' == $order->status && TRUE == $order_payment_info['amount_discrepancy']) {
+        $this->feedback_message = 'Your payment was successful. '
+          . 'However there was a discrepancy in the amount paid.'
+          . '<br/>The order amount is <strong>NGN' . number_format($order->get_order_total(), 2) . '</strong>'
+          . '<br/>while the actual amount paid is <strong>NGN' . number_format(end($order_payment_info['amount']), 2) . '</strong>'
+          . '<br/> A sales person has already been notified of this.<br/>'
+          . '<br/>Below are the details of your payment transaction:'
+          . '<br/><strong>Transaction reference:</strong> ' . end($order_payment_info['merch_txnref'])
+          . '<br/><strong>Customer name:</strong> ' . end($order_payment_info['names'])
+          . '<br/><strong>Amount paid:</strong> '
+            . number_format(end($order_payment_info['amount']), 2)
+          . '<br/><strong>Currency:</strong> ' . end($order_payment_info['currency'])
+          . '<br/><strong>Payment Channel:</strong> ' . end($order_payment_info['channel'])
+          . '<br/><strong>GlobalPay reference:</strong> ' . end($order_payment_info['txnref'])
+          . '<br/><strong>Transaction status description:</strong> ' . end($order_payment_info['payment_status_description']);
+      }
+
       echo wpautop($this->feedback_message);
     }
 
-    function process_payment( $order_id ) {
-      $order = new WC_Order( $order_id );
+    function process_payment($order_id) {
+      $order = new WC_Order($order_id);
       return array(
         'result' => 'success',
         'redirect' => add_query_arg('order', $order->id, add_query_arg('key', $order->order_key, get_permalink(woocommerce_get_page_id('pay'))))
@@ -512,9 +508,12 @@ function woocommerce_globalpay_init() {
     }
     
     // Interpret XML string result into an object.
+    $this->payment_info['amount_discrepancy'] = FALSE;
     $xml = simplexml_load_string($result['getTransactionsResult']);
     if ('successful' == $xml->record->payment_status) {
+      // If there is an amount discrepancy flag it
       if ($xml->record->amount != $amount) {
+        $this->payment_info['amount_discrepancy'] = TRUE;
         $this->payment_info['status'] = 'on-hold';
       } else {
         $this->payment_info['status'] = 'completed';
@@ -732,8 +731,7 @@ function add_globalpay_requery_button ($actions, $the_order) {
     
   $actions['requery'] = array(
     'url'     => '#',
-    'name'     => __( 'Requery', 'woocommerce-globalpay' ),
-    'image_url' => plugins_url( '/images/requery.png', __FILE__ )
+    'name'     => __( 'Requery', 'woocommerce-globalpay' )
   );
 
   return $actions;
@@ -751,9 +749,9 @@ function add_globalpay_requery_js ($hook) {
   
   $WC_icon_dir = plugins_url() . '/woocommerce/assets/images/icons';
   $admin_url = admin_url();
-  $processing_html_template = '<a class="button tips" href="' . $admin_url . '/admin-ajax.php?action=woocommerce-mark-order-processing&amp;order_id=ORDER_ID"><img src="' . $WC_icon_dir . '/processing.png" alt="Processing" width="14"></a>';
-  $complete_html_template = '<a class="button tips" href="' . $admin_url . '/admin-ajax.php?action=woocommerce-mark-order-complete&amp;order_id=ORDER_ID"><img src="' . $WC_icon_dir . '/complete.png" alt="Complete" width="14"></a>';
-  $view_html_template = '<a class="button tips" href="' . $admin_url . '/post.php?post=ORDER_ID&amp;action=edit"><img src="' . $WC_icon_dir . '/view.png" alt="View" width="14"></a>';
+  $processing_html_template = '<a class="button tips processing" href="' . $admin_url . '/admin-ajax.php?action=woocommerce-mark-order-processing&amp;order_id=ORDER_ID">Processing</a>';
+  $complete_html_template = '<a class="button tips complete" href="' . $admin_url . '/admin-ajax.php?action=woocommerce-mark-order-complete&amp;order_id=ORDER_ID">Complete</a>';
+  $view_html_template = '<a class="button tips view" href="' . $admin_url . '/post.php?post=ORDER_ID&amp;action=edit">View</a>';
   
   wp_localize_script(
     'ajax-script', 'ajax_object',

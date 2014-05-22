@@ -5,7 +5,7 @@
  * Description: Allows payments to be made to a Woocommerce shop via GlobalPay
  * Author:      Feyisayo Akinboboye
  * Author URI:  http://twitter.com/Feyisayo
- * Version:     2.1
+ * Version:     3.0
  */
 
 function woocommerce_globalpay_init() {
@@ -34,7 +34,7 @@ function woocommerce_globalpay_init() {
 
       $this->id = 'globalpay';
       $this->icon = apply_filters('woocommerce_globalpay_icon',
-          plugins_url('/images/globalpay_logo.png', __FILE__ ));
+          plugins_url('/images/globalpay_logo.png', __FILE__));
       $this->has_fields = false;
       $this->liveurl = 'https://www.globalpay.com.ng/Paymentgatewaycapture.aspx';
       $this->testurl = 'https://demo.globalpay.com.ng/globalpay_demo/paymentgatewaycapture.aspx';
@@ -75,7 +75,7 @@ function woocommerce_globalpay_init() {
     }
 
     function is_valid_for_use() {
-      
+
       if (!in_array(get_option('woocommerce_currency'), array('NGN'))) {
         return false;
       } else {
@@ -171,17 +171,32 @@ function woocommerce_globalpay_init() {
 
       $order_total = $order->get_order_total();
 
-      if ($this->debug=='yes') {
+      if ($this->debug == 'yes') {
         $this->log->add( 'globalpay', 'Generating payment form for order #' . $order->id . '.');
       }
 
+      $name = '';
+      $user_info = get_userdata($order->user_id);
+      if (!empty($user_info)) {
+        if ($user_info->first_name || $user_info->last_name) {
+          $name = esc_html(ucfirst($user_info->first_name ) . ' ' . ucfirst($user_info->last_name));
+        } else {
+          $name = esc_html(ucfirst($user_info->display_name));
+        }
+      } else {
+        if ($the_order->billing_first_name || $the_order->billing_last_name) {
+        $name = trim( $the_order->billing_first_name . ' ' . $the_order->billing_last_name );
+        } else {
+          $name = __( 'Guest', 'woocommerce' );
+        }
+      }
+            
       $globalpay_args = array(
         'merchantid' => $this->merchant_id,
         'amount' => $order_total,
         'currency' => get_woocommerce_currency(),
         'merch_txnref' => $txn_ref,
-        'names' => trim($order->billing_first_name .
-            ' ' . $order->billing_last_name),
+        'name' => $name,
         'email_address' => $order->billing_email,
         'phone_number' => $order->billing_phone
       );
@@ -192,11 +207,11 @@ function woocommerce_globalpay_init() {
       return $globalpay_args;
     }
     
-    function generate_globalpay_form( $order_id ) {
+    function generate_globalpay_form($order_id) {
       global $woocommerce;
       
-      $order = new WC_Order( $order_id );
-      $globalpay_args = $this->get_globalpay_args( $order );
+      $order = new WC_Order($order_id);
+      $globalpay_args = $this->get_globalpay_args($order);
       $globalpay_args_array = array();
       
       $globalpay_adr = $this->liveurl;
@@ -341,7 +356,7 @@ function woocommerce_globalpay_init() {
         $this->feedback_message = $this->thanks_message
           . '<br/>Below are the details of your payment transaction:'
           . '<br/><strong>Transaction reference:</strong> ' . end($order_payment_info['merch_txnref'])
-          . '<br/><strong>Customer name:</strong> ' . end($order_payment_info['names'])
+          . '<br/><strong>Customer name:</strong> ' . end($order_payment_info['name'])
           . '<br/><strong>Amount paid:</strong> '
             . number_format(end($order_payment_info['amount']), 2)
           . '<br/><strong>Currency:</strong> ' . end($order_payment_info['currency'])
@@ -352,7 +367,7 @@ function woocommerce_globalpay_init() {
         $this->feedback_message = $this->error_message
           . '<br/>Below are the details of your payment transaction:'
           . '<br/><strong>Transaction reference:</strong> ' . end($order_payment_info['merch_txnref'])
-          . '<br/><strong>Customer name:</strong> ' . end($order_payment_info['names'])
+          . '<br/><strong>Customer name:</strong> ' . end($order_payment_info['name'])
           . '<br/><strong>Amount paid:</strong> '
             . number_format(end($order_payment_info['amount']), 2)
           . '<br/><strong>Currency:</strong> ' . end($order_payment_info['currency'])
@@ -367,7 +382,7 @@ function woocommerce_globalpay_init() {
           . '<br/> A sales person has already been notified of this.<br/>'
           . '<br/>Below are the details of your payment transaction:'
           . '<br/><strong>Transaction reference:</strong> ' . end($order_payment_info['merch_txnref'])
-          . '<br/><strong>Customer name:</strong> ' . end($order_payment_info['names'])
+          . '<br/><strong>Customer name:</strong> ' . end($order_payment_info['name'])
           . '<br/><strong>Amount paid:</strong> '
             . number_format(end($order_payment_info['amount']), 2)
           . '<br/><strong>Currency:</strong> ' . end($order_payment_info['currency'])
@@ -691,7 +706,7 @@ HTML;
   function add_globalpay_gateway( $methods ) {
     $methods[] = 'WC_GlobalPay'; return $methods;
   }
-  
+
   add_filter('woocommerce_payment_gateways', 'add_globalpay_gateway' );
 }
 
@@ -700,7 +715,9 @@ HTML;
 add_action('template_redirect', 'globalpay_check_response');
 function globalpay_check_response() {
   global $wp_query;
-  if (isset($wp_query->query['globalpay-transaction-response']) && isset($_SESSION['globalpay_redirect_url'])) {
+  if (isset($wp_query->query['globalpay-transaction-response'])
+    && isset($_SESSION['globalpay_redirect_url'])) {
+
     $r = $_SESSION['globalpay_redirect_url'];
     unset($_SESSION['globalpay_redirect_url']);
     wp_redirect($r);
@@ -714,24 +731,29 @@ add_action('init', 'globalpay_check_transaction_on_user_return');
 function globalpay_check_transaction_on_user_return (){
   // Ensure that $_SESSION['globalpay_redirect_url'] is NOT set as this shows
   // that the function globalpay_check_response() has been previously called
-  if (isset($_SESSION['globalpay_order_id']) && !isset($_SESSION['globalpay_redirect_url'])) {
+  if (isset($_SESSION['globalpay_order_id'])
+    && !isset($_SESSION['globalpay_redirect_url'])) {
+
     $wc_globalpay = new WC_GlobalPay();
     $wc_globalpay->check_transaction_on_user_return();
   }
 }
 
-add_filter('woocommerce_admin_order_actions',
-  'add_globalpay_requery_button', 10, 2);
+add_filter('woocommerce_admin_order_actions', 'add_globalpay_requery_button',
+  10, 2);
 function add_globalpay_requery_button ($actions, $the_order) {
-  // Do this only for GlobalPay-based payments.
+  // Do this only for GlobalPay-based payments that are not successful
   $wc_globalpay = new WC_GlobalPay();
-  if ($the_order->payment_method != $wc_globalpay->id) {
+  if ($the_order->payment_method != $wc_globalpay->id
+      || $the_order->status == 'processing'
+      || $the_order->status == 'completed') {
     return $actions;
   }
-    
+
   $actions['requery'] = array(
     'url'     => '#',
-    'name'     => __( 'Requery', 'woocommerce-globalpay' )
+    'name'     => __('Update order ' . $the_order->id, 'woocommerce-globalpay'),
+    'action' => 'icon-wooglobalpay-webfont'
   );
 
   return $actions;
@@ -742,7 +764,7 @@ function add_globalpay_requery_js ($hook) {
   if( 'edit.php' != $hook ) return;
         
   wp_enqueue_script(
-    'ajax-script',
+    'globalpay-ajax-script',
     plugins_url( 'woocommerce-globalpay-requery.js', __FILE__ ),
     array('jquery')
   );
@@ -754,8 +776,7 @@ function add_globalpay_requery_js ($hook) {
   $view_html_template = '<a class="button tips view" href="' . $admin_url . '/post.php?post=ORDER_ID&amp;action=edit">View</a>';
   
   wp_localize_script(
-    'ajax-script', 'ajax_object',
-    array(
+    'globalpay-ajax-script', 'globalpay_ajax_object', array(
       'ajax_url' => admin_url( 'admin-ajax.php' ),
       'processing_html_template' => $processing_html_template,
       'complete_html_template' => $complete_html_template,
@@ -773,6 +794,12 @@ function globalpay_requery_callback () {
   }
   echo $status;
   die();
+}
+
+add_action('woocommerce_admin_css', 'globalpay_add_custom_css');
+function globalpay_add_custom_css() {
+  wp_register_style('globalpay-css', plugins_url( '/css/styles.css', __FILE__ ));
+  wp_enqueue_style('globalpay-css');
 }
 
 // Start a PHP session as WP does not use it.
